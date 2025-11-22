@@ -1,5 +1,5 @@
-import { html, render } from 'https://esm.sh/lit-html'
-import { Signal } from 'https://esm.sh/signal-polyfill'
+import { html, render } from 'lit-html'
+import { Signal } from 'signal-polyfill'
 
 export const lightElement = (fn) => define(fn, { useShadow: false })
 export const shadowElement = (fn) => define(fn)

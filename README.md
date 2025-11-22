@@ -6,14 +6,23 @@
 Web Components are the best way to share small pieces of functionality for web
 pages, especially when used in sites with static HTML. You get all the benefits
 of a component based architecture like React without having to swallow the
-whole workflow. Use the benefits of declarative, static HTML but get all the
-goodness of simple interactivity.
+whole workflow. Use declarative, static HTML but also get the
+goodness of bits of interactivity.
 
-To do:
-- talk about signals
-- talk about lit html and templating
-- link to Hot Page blog post
+Making simple web components is kinda sucky though -- there's a lot of
+boilerplate, you have to know about JavaScript classes and keep a lot of stuff
+in your head about lifecycle and callbacks to make it work right.
 
+This project is an attempt to simplify the process of building one-off custom
+elements. With a simple helper function you can write components with
+reactivity using a functional structure.
+
+The best part is this builds on new web standards that make all this super
+easy. The only two dependencies are things that (hopefuly) will be standardized
+in the web platform sooner rather than later. Read more on [the blog
+post](https://hot.page/blog/functional-element).
+
+6.9kb gziped.
 
 ## Quick Start
 

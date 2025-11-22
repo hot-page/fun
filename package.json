@@ -1,0 +1,32 @@
+{
+  "name": "@hot-page/functional-element",
+  "version": "0.0.1",
+  "description": "Simple define helper for functional web components",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hot-page/functional-element.git"
+  },
+  "keywords": [
+    "custom",
+    "element",
+    "web",
+    "component",
+    "functional",
+    "reactive"
+  ],
+  "author": "Hot Page",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/hot-page/functional-element/issues"
+  },
+  "homepage": "https://hot.page/blog/functional-element",
+  "dependencies": {
+    "lit-html": "^3.3.1",
+    "signal-polyfill": "^0.2.2",
+    "vite": "^7.2.4"
+  }
+}
