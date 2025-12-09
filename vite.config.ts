@@ -1,12 +1,19 @@
 import { defineConfig } from 'vite'
-import { resolve } from 'path'
 
 export default defineConfig({
+  server: {
+    port: 8090,
+    cors: true,
+    https: {
+      key: './localhost-key.pem',
+      cert: './localhost.pem',
+    },
+  },
   build: {
     emptyOutDir: false,
     lib: {
-      entry: resolve(__dirname, 'src/index.ts'),
-      name: 'Easy',
+      entry: './src/index.ts',
+      name: 'Functional Element',
       fileName: 'index',
       formats: ['es']
     },

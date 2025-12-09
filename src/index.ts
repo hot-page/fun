@@ -57,7 +57,7 @@ function shadowElement(
 
 const state = <T>(value: T) => new Signal.State(value)
 
-export { state, lightElement, shadowElement, define }
+export { state, lightElement, shadowElement }
 
 export function define(options: DefineOptions) {
   const { component, attributes = [], useShadow = true } = options

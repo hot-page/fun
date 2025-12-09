@@ -139,7 +139,7 @@ define({
 Use the `effect` function to register side effects that need cleanup:
 
 ```javascript
-shadowElement(function Timer({ effect }) {
+shadowElement(function oneSecondCounter({ effect }) {
   const count = state(0)
 
   effect(() => {

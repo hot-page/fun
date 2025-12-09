@@ -2,8 +2,6 @@
   "name": "@hot-page/functional-element",
   "version": "0.0.2",
   "description": "Simple define helper for functional web components",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hot-page/functional-element.git"
@@ -24,7 +22,7 @@
     "src"
   ],
   "scripts": {
-    "dev": "vite",
+    "start": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "prepublishOnly": "npm run build"
