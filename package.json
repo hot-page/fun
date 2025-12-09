@@ -1,14 +1,33 @@
 {
   "name": "@hot-page/functional-element",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Simple define helper for functional web components",
-  "main": "src/index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
-  },
+  "main": "src/index.ts",
+  "types": "src/index.ts",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/hot-page/functional-element.git"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "source": "./src/index.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "custom",
@@ -23,10 +42,12 @@
   "bugs": {
     "url": "https://github.com/hot-page/functional-element/issues"
   },
-  "homepage": "https://hot.page/blog/functional-element",
   "dependencies": {
     "lit-html": "^3.3.1",
-    "signal-polyfill": "^0.2.2",
+    "signal-polyfill": "^0.2.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
     "vite": "^7.2.4"
   }
 }
