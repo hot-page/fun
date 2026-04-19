@@ -7,25 +7,34 @@ export type RenderFunction = () => ReturnType<typeof html>
 export type CleanupFunction = () => void
 export type EffectFunction = () => CleanupFunction | void
 
-export interface ComponentContext {
-  internals: ElementInternals
-  effect: (fn: EffectFunction) => void
-  [key: string]: any // For observed attributes as signals
+type AttributeSignals<Attrs extends string> = {
+  [K in Attrs]: Signal.State<string | null>
 }
 
-export type FunctionalComponent = (context: ComponentContext) => RenderFunction
+export type ComponentContext<Attrs extends string = never> =
+  AttributeSignals<Attrs> & {
+    internals: ElementInternals
+    effect: (fn: EffectFunction) => void
+  }
 
-export interface DefineOptions {
-  component: FunctionalComponent
-  attributes?: string[]
+export type FunctionalComponent<Attrs extends string = never> =
+  (context: ComponentContext<Attrs>) => RenderFunction
+
+export interface DefineOptions<Attrs extends string = never> {
+  component: FunctionalComponent<Attrs>
+  tagName?: string
+  attributes?: Attrs[]
   useShadow?: boolean
+  formAssociated?: boolean
 }
+
+const RESERVED_KEYS = new Set<string>(['internals', 'effect'])
 
 function lightElement(fn: FunctionalComponent): void
-function lightElement(observedAttributes: string[], fn: FunctionalComponent): void
-function lightElement(
-  fnOrAttrs: FunctionalComponent | string[],
-  maybeFn?: FunctionalComponent
+function lightElement<Attrs extends string>(observedAttributes: Attrs[], fn: FunctionalComponent<Attrs>): void
+function lightElement<Attrs extends string>(
+  fnOrAttrs: FunctionalComponent | Attrs[],
+  maybeFn?: FunctionalComponent<Attrs>
 ): void {
   if (typeof fnOrAttrs === 'function') {
     define({ component: fnOrAttrs, useShadow: false })
@@ -39,10 +48,10 @@ function lightElement(
 }
 
 function shadowElement(fn: FunctionalComponent): void
-function shadowElement(observedAttributes: string[], fn: FunctionalComponent): void
-function shadowElement(
-  fnOrAttrs: FunctionalComponent | string[],
-  maybeFn?: FunctionalComponent
+function shadowElement<Attrs extends string>(observedAttributes: Attrs[], fn: FunctionalComponent<Attrs>): void
+function shadowElement<Attrs extends string>(
+  fnOrAttrs: FunctionalComponent | Attrs[],
+  maybeFn?: FunctionalComponent<Attrs>
 ): void {
   if (typeof fnOrAttrs === 'function') {
     define({ component: fnOrAttrs, useShadow: true })
@@ -59,10 +68,19 @@ const state = <T>(value: T) => new Signal.State(value)
 
 export { state, lightElement, shadowElement }
 
-export function define(options: DefineOptions) {
-  const { component, attributes = [], useShadow = true } = options
+export function define<Attrs extends string = never>(options: DefineOptions<Attrs>) {
+  const {
+    component,
+    tagName,
+    attributes = [] as unknown as Attrs[],
+    useShadow = true,
+    formAssociated = false
+  } = options
 
-  const elementName = component.name.replaceAll(/(.)([A-Z])/g, '$1-$2').toLowerCase()
+  const elementName = (tagName ?? component.name
+    .replaceAll(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replaceAll(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
+    .toLowerCase())
 
   if (!elementName.includes('-')) {
     throw new Error(`Function ${component.name} must include at least one capital letter to be converted to a valid custom element name`)
@@ -72,46 +90,74 @@ export function define(options: DefineOptions) {
     throw new Error(`Custom element with name ${elementName} already defined`)
   }
 
+  for (const attr of attributes) {
+    if (RESERVED_KEYS.has(attr)) {
+      throw new Error(`Attribute name "${attr}" conflicts with a reserved context property.`)
+    }
+  }
+
   customElements.define(elementName, class extends HTMLElement {
     #template!: Signal.Computed<ReturnType<typeof html>>
     #watcher!: any
     #effects: EffectFunction[] = []
     #cleanups: CleanupFunction[] = []
     #attributeSignals: Map<string, Signal.State<string | null>> = new Map()
-    #reflectionWatcher!: any
 
     static get observedAttributes() {
       return attributes
+    }
+
+    static get formAssociated() {
+      return formAssociated
     }
 
     constructor() {
       super()
       if (useShadow) this.attachShadow({ mode: 'open' })
 
-      const context: ComponentContext = {
+      const context = {
         internals: this.attachInternals(),
         effect: (fn: EffectFunction) => {
           this.#effects.push(fn)
         }
-      }
+      } as ComponentContext<Attrs>
 
       attributes.forEach(attr => {
         const signal = new Signal.State(this.getAttribute(attr), {
           equals: (prev, next) => prev === next
         })
         this.#attributeSignals.set(attr, signal)
-        context[attr] = signal
+        ;(context as Record<string, unknown>)[attr] = signal
 
         Object.defineProperty(this, attr, {
           get() {
             return signal.get()
           },
-          set(value: string | null) {
+          set(value: unknown) {
+            if (value !== null && typeof value !== 'string') {
+              throw new TypeError(`Attribute "${attr}" only accepts strings or null, got ${typeof value}.`)
+            }
             signal.set(value)
           },
           enumerable: true,
           configurable: true
         })
+
+        const watcher = new Signal.subtle.Watcher(() => {
+          // Microtask required: setAttribute triggers attributeChangedCallback
+          // which calls signal.set(), and writing to a signal inside a watcher
+          // notify callback is not allowed.
+          queueMicrotask(() => {
+            const value = signal.get()
+            if (value === null) {
+              this.removeAttribute(attr)
+            } else {
+              this.setAttribute(attr, value)
+            }
+            watcher.watch()
+          })
+        })
+        watcher.watch(signal)
       })
 
       const templateFn = component.call(this, context)
@@ -130,27 +176,6 @@ export function define(options: DefineOptions) {
           renderTemplate()
           this.#watcher.watch()
         })
-      })
-
-      this.#reflectionWatcher = new Signal.subtle.Watcher(() => {
-        queueMicrotask(() => {
-          this.#attributeSignals.forEach((signal, attr) => {
-            const value = signal.get()
-            if (value === null) {
-              this.removeAttribute(attr)
-            } else {
-              this.setAttribute(attr, value)
-            }
-          })
-
-          this.#attributeSignals.forEach(signal => {
-            this.#reflectionWatcher.watch(signal)
-          })
-        })
-      })
-
-      this.#attributeSignals.forEach(signal => {
-        this.#reflectionWatcher.watch(signal)
       })
 
       this.#watcher.watch(this.#template)

@@ -1,5 +1,5 @@
 
-# Functional Element
+# Hot Element
 
 ## Introduction
 
@@ -23,7 +23,8 @@ in the web platform sooner rather than later.
 
 ## Goals
 
-- **Static pages with sprinkles of interactivity** - Perfect for adding dynamic elements to mostly-static HTML sites
+- **Static pages with sprinkles of interactivity** - Perfect for adding dynamic
+  elements to mostly-static HTML sites
 - **Minimal boilerplate** - Write components quickly without class ceremony
 - **Standards-based** - Built on Web Components, works everywhere
 
@@ -31,15 +32,38 @@ in the web platform sooner rather than later.
 
 - **Building full applications** - Use React, Vue, or Svelte for SPAs
 - **Complex state management** - This isn't Redux or Zustand
-- **Build tooling** - No bundlers, no compilation (though you can use them if you want)
+- **Build tooling** - No bundlers, no compilation (though you can use them if
+  you want)
 - **Large state trees** - Keep it simple with local component state
+
+
+## What You Get
+
+- Easy reactivity with Signals
+- Much less boilerplate than vanilla Web Components
+- Automatic cleanup with effects
+- Observed attributes support
+- Full TypeScript support
+
+What you give up:
+- Class ceremonny
+- Something about performance
+
+
+## Prior Art
+
+This was directly inspired by Ginger's [post on Piccalilli](https://piccalil.li/blog/functional-custom-elements-the-easy-way/).
+
+Obviously, React for the simplicity of functional components.
+
+
 
 ## Quick Start
 
-1. Load `@hot-page/functional-element` from a CDN or install it with NPM.
-2. Import one of the define functions: `shadowElement` or `lightElement`.
-   Shadow element renders in shadow DOM, and light element renders in normal
-   DOM.
+1. Load `@hot-page/hot-element` from a CDN or install it with NPM.
+2. Import one of the define functions: `shadowElement` or `lightElement` as
+   well as the `html` templator. Shadow element renders in shadow DOM, and
+   light element renders in normal DOM.
 3. Define your functional component by providing a function.
 4. Use the `state` argument to create new reactive properties
 5. Return a template that will be re-rendered
@@ -47,7 +71,7 @@ in the web platform sooner rather than later.
 Create a new element in plain JavaScript:
 
 ```javascript
-import { shadowElement, html, state } from 'https://esm.sh/@hot-page/functional-element'
+import { shadowElement, html, state } from 'https://esm.sh/@hot-page/hot-element'
 
 // Call the define function with our component
 shadowElement(function HueSlider() {
@@ -121,17 +145,35 @@ This package provides two define exports:
 You can also use the `define()` function directly if you prefer:
 
 ```javascript
-import { define, html, state } from '@hot-page/functional-element'
+import { define, html, state } from '@hot-page/hot-element'
 
 define({
   attributes: ['color', 'size'],
-  useShadow: true  // or false for light DOM
+  useShadow: true, // or false for light DOM
   component: function MyElement({ effect }) {
     const count = state(0)
     return () => html`<p>${count.get()}</p>`
   },
 })
 ```
+
+You can also provide a `tagName` to override the name derived from the function:
+
+```javascript
+define({
+  tagName: 'my-element',
+  attributes: ['color', 'size'],
+  component({ effect }) {
+    const count = state(0)
+    return () => html`<p>${count.get()}</p>`
+  },
+})
+```
+
+I can think of two cases where you'll want this:
+
+- **Minification** — these components are so small they barely need minifying, but if you do, bundlers will mangle function names and break the auto-derived tag name. `tagName` is your escape hatch.
+- **Adjacent acronyms** — `HTMLParser` becomes `html-parser` and `CSSAnimation` becomes `css-animation`, but `XMLHTTPRequest` becomes `xmlhttp-request` rather than `xml-http-request`. Where two acronyms are jammed together there's no way to know where one ends and the other begins. Use `tagName`.
 
 
 ## Lifecycle & Cleanup
@@ -276,6 +318,69 @@ shadowElement(
 ```
 
 
+## Custom Properties
+
+Observed attributes are always strings. For richer data, use a plain signal with `Object.defineProperty` to expose a property on the element.
+
+### JS-only property (no attribute reflection)
+
+Use this when you want to pass objects or other non-string values to an element, and don't need `setAttribute` to work:
+
+```javascript
+shadowElement(function ColorPicker() {
+  const color = state({ red: 0, green: 0, blue: 0 })
+
+  Object.defineProperty(this, 'color', {
+    get() { return color.get() },
+    set(value) { color.set(value) },
+  })
+
+  return () => html`
+    <p>Red: ${color.get().red}</p>
+  `
+})
+```
+
+```javascript
+const picker = document.querySelector('color-picker')
+picker.color = { red: 255, green: 0, blue: 0 } // triggers re-render
+```
+
+`setAttribute('color', ...)` will have no effect since `'color'` is not in `attributes`.
+
+
+### Observed attribute with custom property setter
+
+Use this when you want both `setAttribute` to work and the property to accept richer values. Declare the attribute normally to get signal and `attributeChangedCallback` wiring, then override the property:
+
+```javascript
+shadowElement(['color'], function ColorPicker({ color }) {
+
+  Object.defineProperty(this, 'color', {
+    get() { return color.get() },
+    set(value) {
+      // Accept objects by serializing to a string for the attribute
+      color.set(typeof value === 'string' ? value : JSON.stringify(value))
+    },
+  })
+
+  return () => {
+    const val = color.get()
+    const parsed = val ? JSON.parse(val) : { red: 0 }
+    return html`<p>Red: ${parsed.red}</p>`
+  }
+})
+```
+
+```javascript
+const picker = document.querySelector('color-picker')
+picker.color = { red: 255 }          // sets attribute to '{"red":255}'
+picker.setAttribute('color', '{"red":128}')  // also works
+```
+
+The tradeoff: the attribute value is JSON, which is readable but not pretty in the DOM. If you don't need `setAttribute` support, the JS-only pattern above is cleaner.
+
+
 ## Using Element Internals
 
 Access the ElementInternals API for custom element states and ARIA:
@@ -340,6 +445,32 @@ The `internals` object gives you access to:
 - ARIA properties (`ariaLabel`, `ariaDisabled`, `ariaBusy`, etc.)
 - Form participation (`setFormValue`, `setValidity`)
 
+### Form participation
+
+To use the form participation APIs (`setFormValue`, `setValidity`, etc.), you must opt in with `formAssociated: true`. Without it the browser will throw when you call those methods.
+
+```javascript
+define({
+  attributes: ['value'],
+  formAssociated: true,
+  component({ value, internals }) {
+    return () => {
+      internals.setFormValue(value.get())
+
+      return html`
+        <input
+          type="text"
+          .value=${value.get() || ''}
+          @input=${(e) => value.set(e.target.value)}
+        >
+      `
+    }
+  }
+})
+```
+
+Custom states and ARIA properties work without `formAssociated` — you only need it if you're integrating with `<form>` elements.
+
 
 ## Shared State
 
@@ -352,7 +483,7 @@ For static HTML pages with script tags, the simplest approach is to put your sta
 <html>
 <head>
   <script type="module">
-    import { shadowElement, html, state } from 'https://esm.sh/@hot-page/functional-element'
+    import { shadowElement, html, state } from 'https://esm.sh/@hot-page/hot-element'
 
     // Create global store on window
     window.store = {
@@ -409,7 +540,7 @@ If you're using JavaScript modules, you can share state at the module level:
 
 ```javascript
 // shared-counter.js
-import { shadowElement, html, state } from '@hot-page/functional-element'
+import { shadowElement, html, state } from '@hot-page/hot-element'
 
 // This state is shared across all instances
 const sharedCount = state(0)
@@ -431,7 +562,7 @@ For more complex scenarios with multiple files, create a dedicated store module:
 
 ```javascript
 // store.js
-import { state } from '@hot-page/functional-element'
+import { state } from '@hot-page/hot-element'
 
 export const store = {
   user: state(null),
@@ -455,7 +586,7 @@ export const store = {
 
 ```javascript
 // user-badge.js
-import { shadowElement, html } from '@hot-page/functional-element'
+import { shadowElement, html } from '@hot-page/hot-element'
 import { store } from './store.js'
 
 shadowElement(function UserBadge() {
@@ -473,24 +604,119 @@ shadowElement(function UserBadge() {
 All components reading from `store` will automatically re-render when the shared state changes.
 
 
-## Tradeoffs
+## Gotchas
 
-What you get:
-- Easy reactivity with Signals
-- Much less boilerplate than vanilla Web Components
-- Automatic cleanup with effects
-- Observed attributes support
-- Full TypeScript support
+### Call `signal.get()` inside the render function
 
-What you give up:
-- Private methods (for public methods, assign them to `this`)
+Signals only track reads that happen during rendering. If you read a signal in the component body, you capture a snapshot — not a live reference:
+
+```javascript
+shadowElement(function MyEl() {
+  const count = state(0)
+  const value = count.get() // ❌ captured once, never updates
+
+  return () => html`<p>${value}</p>`
+})
+```
+
+```javascript
+shadowElement(function MyEl() {
+  const count = state(0)
+
+  return () => html`<p>${count.get()}</p>` // ✅ read during render, reactive
+})
+```
+
+### Don't destructure signal values in the component body
+
+Same issue. Destructuring reads the value once at component setup time:
+
+```javascript
+shadowElement(function MyEl() {
+  const color = state({ red: 0, green: 0, blue: 0 })
+  const { red } = color.get() // ❌ captured once
+
+  return () => html`<p>${red}</p>`
+})
+```
+
+```javascript
+shadowElement(function MyEl() {
+  const color = state({ red: 0, green: 0, blue: 0 })
+
+  return () => html`<p>${color.get().red}</p>` // ✅
+})
+```
+
+### Use `function`, not arrow functions
+
+The component must be a named `function` declaration or expression. Arrow functions don't have their own `this` binding — `bind()`, `call()`, and `apply()` can't fix this, it's a language rule. They also have no `name`, so tag name derivation fails:
+
+```javascript
+shadowElement(() => { ... })           // ❌ no name, wrong this
+shadowElement(function() { ... })      // ❌ no name (anonymous)
+shadowElement(function MyEl() { ... }) // ✅
+```
+
+### Effects run on connect, not on construction
+
+Effects are registered during the component function call but don't run until the element is connected to the DOM. If you construct an element programmatically without appending it, effects haven't fired yet:
+
+```javascript
+const el = document.createElement('my-counter')
+// effect hasn't run yet
+
+document.body.appendChild(el)
+// now it runs
+```
+
+### Setting multiple signals triggers one render
+
+Updating several signals in a row is coalesced into a single render on the next microtask. This is a feature, but it means you can't observe intermediate state between sets:
+
+```javascript
+count.set(1)
+label.set('updated')
+// one render, not two
+```
+
+### Absent attributes are `null`, not `undefined`
+
+`getAttribute` follows the DOM spec and returns `null` for missing attributes, never `undefined`. Check accordingly:
+
+```javascript
+if (count.get() === null) { ... }  // ✅ attribute is absent
+if (count.get() === undefined) { ... }  // ❌ never true
+```
 
 
-## Prior Art
+## Rendering SVG
 
-This was directly inspired by Ginger's [post on Piccalilli](https://piccalil.li/blog/functional-custom-elements-the-easy-way/).
+This package also exports a `svg` tagged template literal (re-exported from lit-html). Use it instead of `html` **only when the root of your template is an SVG element** — for example when writing a custom SVG shape or icon component:
 
-Obviously, React for the simplicity of functional components.
+```javascript
+import { shadowElement, svg, state } from '@hot-page/hot-element'
+
+shadowElement(function AnimatedCircle() {
+  const r = state(10)
+  return () => svg`<circle cx="50" cy="50" r="${r.get()}" fill="red" />`
+})
+```
+
+```html
+<svg>
+  <animated-circle></animated-circle>
+</svg>
+```
+
+If your template starts with an HTML element — even one that contains `<svg>` inside — use `html` as normal:
+
+```javascript
+return () => html`<div><svg>...</svg></div>` // ✅ use html, not svg
+return () => svg`<circle ... />`             // ✅ use svg only at SVG root
+```
+
+The distinction matters because lit-html uses the tag to parse the template in the correct namespace context. Using `html` for SVG roots will result in elements created in the HTML namespace, which browsers won't render correctly.
 
 
 ## A Hot Page Project
