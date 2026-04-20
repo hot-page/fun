@@ -118,7 +118,7 @@ Let's talk about what's happening here.
 1. You are calling a function `shadowElement`. We can call that the "define
    function".
 2. You are passing a single argument, which is also a function. Let's call that
-   the "functional component".
+   the "setup function".
 3. That in turn returns a function, which we can call the "render function".
 
 I told you this was functional!
@@ -126,14 +126,15 @@ I told you this was functional!
 It's important to understand when these functions will run.
 
 1. The define function runs once for every custom element you want to create.
-2. The functional component will run every time one of your elements on the
+2. The setup function will run every time one of your elements on the
    page is created.
 3. The render function runs when the reactive properties change and the
-   component's markup will be updated
+   element's markup will be updated
 
-The component receives a context object with:
+The setup function receives a context object with:
 - `effect` - Register side effects with cleanup (see Lifecycle & Cleanup below)
 - `internals` - Access to ElementInternals API (see Using Element Internals below)
+- `styleProps` - Set CSS custom properties on the host element (see Styling below)
 
 
 ## Rendering in Shadow or Light DOM
@@ -150,7 +151,7 @@ import { define, html, state } from '@hot-page/hot-element'
 define({
   attributes: ['color', 'size'],
   useShadow: true, // or false for light DOM
-  component: function MyElement({ effect }) {
+  setup: function MyElement({ effect }) {
     const count = state(0)
     return () => html`<p>${count.get()}</p>`
   },
@@ -163,7 +164,7 @@ You can also provide a `tagName` to override the name derived from the function:
 define({
   tagName: 'my-element',
   attributes: ['color', 'size'],
-  component({ effect }) {
+  setup({ effect }) {
     const count = state(0)
     return () => html`<p>${count.get()}</p>`
   },
@@ -174,6 +175,125 @@ I can think of two cases where you'll want this:
 
 - **Minification** — these components are so small they barely need minifying, but if you do, bundlers will mangle function names and break the auto-derived tag name. `tagName` is your escape hatch.
 - **Adjacent acronyms** — `HTMLParser` becomes `html-parser` and `CSSAnimation` becomes `css-animation`, but `XMLHTTPRequest` becomes `xmlhttp-request` rather than `xml-http-request`. Where two acronyms are jammed together there's no way to know where one ends and the other begins. Use `tagName`.
+
+
+## Styling
+
+Shadow DOM elements get native style encapsulation, so anything you put in a `<style>` tag inside your template is scoped to the component. For most cases that's all you need.
+
+### Shared stylesheets with `styles`
+
+When you have more than a line or two of CSS, or when you render many instances of the same element, pass a `styles` string. Both `shadowElement` and `lightElement` support it. This creates a single [constructed stylesheet](https://developer.mozilla.org/en-US/docs/Web/API/CSSStyleSheet/CSSStyleSheet) that is shared across every instance of the element — the browser parses the CSS once.
+
+For shadow DOM, the sheet is adopted into each shadow root:
+
+```javascript
+shadowElement(
+  `:host {
+    display: block;
+    padding: 16px;
+    background: hsl(var(--hue, 0), 100%, 90%);
+  }
+
+  p {
+    margin: 0;
+  }`,
+  function HueSwatch() {
+    return () => html`<p>Hello</p>`
+  },
+)
+```
+
+For light DOM, the sheet is wrapped in [`@scope`](https://developer.mozilla.org/en-US/docs/Web/CSS/@scope) and adopted into the document. Use `:scope` to refer to the host element:
+
+```javascript
+lightElement(
+  `:scope {
+    display: block;
+    padding: 16px;
+  }
+
+  p {
+    margin: 0;
+  }`,
+  function MyCard() {
+    return () => html`<p>Hello</p>`
+  },
+)
+```
+
+The `styles` argument goes between attributes (if any) and the setup function. Both define functions accept the same overloads:
+
+```javascript
+shadowElement(fn)                    // no attrs, no styles
+shadowElement(styles, fn)            // styles only
+shadowElement(attrs, fn)             // attrs only
+shadowElement(attrs, styles, fn)     // both
+
+lightElement(fn)
+lightElement(styles, fn)
+lightElement(attrs, fn)
+lightElement(attrs, styles, fn)
+```
+
+Or via `define()`:
+
+```javascript
+define({
+  attributes: ['color'],
+  useShadow: true,
+  styles: `:host { display: block; }`,
+  setup: function MyElement({ color }) {
+    return () => html`<p>${color.get()}</p>`
+  }
+})
+```
+
+You can still use `<style>` tags inside templates, and they coexist fine with `styles` — but the constructed stylesheet approach is more efficient for styles that don't change per-render.
+
+#### Shadow vs. light: what's different
+
+- **Shadow DOM (`shadowElement`)** gives you full style encapsulation. External CSS can't reach into the shadow root, and your styles can't leak out. Use `:host` to style the element itself.
+- **Light DOM (`lightElement`)** uses `@scope` to limit where your selectors match, but this is not encapsulation. External CSS can still target elements inside your component, and specificity rules still apply as normal. Use `:scope` to style the element itself.
+
+If you copy shadow styles into a light element, remember to swap `:host` for `:scope`.
+
+### Per-instance styling with `styleProps`
+
+CSS custom properties are the platform's answer to per-instance styling: set them on the host, they cascade into the component. The `styleProps` helper is a shortcut for setting multiple custom properties at once without typing `this.style.setProperty` over and over:
+
+```javascript
+shadowElement(
+  `:host {
+    display: block;
+    background: hsl(var(--hue), var(--saturation), 50%);
+  }`,
+  function HueSlider({ styleProps }) {
+    function onInput(event) {
+      styleProps({
+        hue: event.target.value,
+        saturation: '80%'
+      })
+    }
+
+    return () => html`
+      <input type="range" min="0" max="360" @input=${onInput}>
+    `
+  },
+)
+```
+
+Keys are converted from camelCase to kebab-case and prefixed with `--`. So `hueShift` becomes `--hue-shift`. Numbers are coerced to strings. Passing `null` removes the property:
+
+```javascript
+styleProps({ hue: 180 })        // --hue: 180
+styleProps({ hueShift: '45' })  // --hue-shift: 45
+styleProps({ hue: null })       // removes --hue
+```
+
+`styleProps` merges with whatever is already on `this.style` — it only touches the keys you pass.
+
+Use `styleProps` when you want to update visual state from an event handler without triggering a template re-render. Writing to a signal would re-run the render function even if only the CSS changed; `styleProps` skips that entirely.
 
 
 ## Lifecycle & Cleanup
@@ -198,7 +318,7 @@ shadowElement(function oneSecondCounter({ effect }) {
     // You can register multiple effects
     const handleResize = () => console.log('resized')
     window.addEventListener('resize', handleResize)
-    
+
     return () => window.removeEventListener('resize', handleResize)
   })
 
@@ -318,7 +438,7 @@ shadowElement(
 ```
 
 
-## Custom Properties
+## Element Properties
 
 Observed attributes are always strings. For richer data, use a plain signal with `Object.defineProperty` to expose a property on the element.
 
@@ -453,7 +573,7 @@ To use the form participation APIs (`setFormValue`, `setValidity`, etc.), you mu
 define({
   attributes: ['value'],
   formAssociated: true,
-  component({ value, internals }) {
+  setup({ value, internals }) {
     return () => {
       internals.setFormValue(value.get())
 
@@ -608,7 +728,7 @@ All components reading from `store` will automatically re-render when the shared
 
 ### Call `signal.get()` inside the render function
 
-Signals only track reads that happen during rendering. If you read a signal in the component body, you capture a snapshot — not a live reference:
+Signals only track reads that happen during rendering. If you read a signal in the setup function body, you capture a snapshot — not a live reference:
 
 ```javascript
 shadowElement(function MyEl() {
@@ -627,9 +747,9 @@ shadowElement(function MyEl() {
 })
 ```
 
-### Don't destructure signal values in the component body
+### Don't destructure signal values in the setup function body
 
-Same issue. Destructuring reads the value once at component setup time:
+Same issue. Destructuring reads the value once at setup time:
 
 ```javascript
 shadowElement(function MyEl() {
@@ -648,19 +768,33 @@ shadowElement(function MyEl() {
 })
 ```
 
-### Use `function`, not arrow functions
+### Arrow functions have caveats
 
-The component must be a named `function` declaration or expression. Arrow functions don't have their own `this` binding — `bind()`, `call()`, and `apply()` can't fix this, it's a language rule. They also have no `name`, so tag name derivation fails:
+The library does two things with your setup function: it calls it with `this` bound to the element, and it reads `.name` to derive the tag name. Arrow functions don't play nicely with either:
+
+- Arrow functions ignore `.call(this, ...)` — they use lexical `this`. If you need to read or write properties on the host element from inside setup, use a named `function`.
+- Arrow functions passed inline are anonymous (`.name === ''`), so tag name derivation fails. Assign them to a capitalized variable or provide an explicit `tagName`.
 
 ```javascript
-shadowElement(() => { ... })           // ❌ no name, wrong this
-shadowElement(function() { ... })      // ❌ no name (anonymous)
-shadowElement(function MyEl() { ... }) // ✅
+// ❌ anonymous — no name to derive tag from
+shadowElement(() => { ... })
+
+// ❌ anonymous, same problem
+shadowElement(function() { ... })
+
+// ✅ named function — preferred, and lets you use `this`
+shadowElement(function MyEl() { ... })
+
+// ✅ arrow works if you provide tagName and don't need `this`
+define({
+  tagName: 'my-el',
+  setup: () => () => html`<p>hi</p>`,
+})
 ```
 
 ### Effects run on connect, not on construction
 
-Effects are registered during the component function call but don't run until the element is connected to the DOM. If you construct an element programmatically without appending it, effects haven't fired yet:
+Effects are registered during the setup function call but don't run until the element is connected to the DOM. If you construct an element programmatically without appending it, effects haven't fired yet:
 
 ```javascript
 const el = document.createElement('my-counter')
@@ -688,6 +822,13 @@ label.set('updated')
 if (count.get() === null) { ... }  // ✅ attribute is absent
 if (count.get() === undefined) { ... }  // ❌ never true
 ```
+
+
+### `styles` and cross-document adoption
+
+Constructed stylesheets are bound to the `Document` that created them. If a custom element is moved to a different document (for example via `document.adoptNode()` into an iframe or a popup window), the stylesheet from the original document is no longer usable in the new one, and the element's styles will stop applying.
+
+This is rare — most apps never move elements across documents — and this library doesn't handle it. If you need to support that scenario, avoid the `styles` option and put a `<style>` tag inside your template instead.
 
 
 ## Rendering SVG

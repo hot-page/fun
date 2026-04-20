@@ -6,6 +6,9 @@ export { html, svg }
 export type RenderFunction = () => ReturnType<typeof html>
 export type CleanupFunction = () => void
 export type EffectFunction = () => CleanupFunction | void
+export type StylePropsFunction = (
+  props: Record<string, string | number | null>
+) => void
 
 type AttributeSignals<Attrs extends string> = {
   [K in Attrs]: Signal.State<string | null>
@@ -15,53 +18,88 @@ export type ComponentContext<Attrs extends string = never> =
   AttributeSignals<Attrs> & {
     internals: ElementInternals
     effect: (fn: EffectFunction) => void
+    styleProps: StylePropsFunction
   }
 
 export type FunctionalComponent<Attrs extends string = never> =
   (context: ComponentContext<Attrs>) => RenderFunction
 
 export interface DefineOptions<Attrs extends string = never> {
-  component: FunctionalComponent<Attrs>
+  setup: FunctionalComponent<Attrs>
   tagName?: string
   attributes?: Attrs[]
   useShadow?: boolean
   formAssociated?: boolean
+  styles?: string
 }
 
-const RESERVED_KEYS = new Set<string>(['internals', 'effect'])
+const RESERVED_KEYS = new Set<string>(['internals', 'effect', 'styleProps'])
+
+// Convert camelCase property key to kebab-case CSS custom property name.
+// `hueShift` -> `--hue-shift`, `hue` -> `--hue`
+function toCustomProperty(key: string): string {
+  const kebab = key
+    .replaceAll(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replaceAll(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
+    .toLowerCase()
+  return `--${kebab}`
+}
 
 function lightElement(fn: FunctionalComponent): void
-function lightElement<Attrs extends string>(observedAttributes: Attrs[], fn: FunctionalComponent<Attrs>): void
+function lightElement(styles: string, fn: FunctionalComponent): void
 function lightElement<Attrs extends string>(
-  fnOrAttrs: FunctionalComponent | Attrs[],
-  maybeFn?: FunctionalComponent<Attrs>
+  observedAttributes: Attrs[],
+  fn: FunctionalComponent<Attrs>
+): void
+function lightElement<Attrs extends string>(
+  observedAttributes: Attrs[],
+  styles: string,
+  fn: FunctionalComponent<Attrs>
+): void
+function lightElement<Attrs extends string>(
+  a: FunctionalComponent | Attrs[] | string,
+  b?: FunctionalComponent<Attrs> | string,
+  c?: FunctionalComponent<Attrs>
 ): void {
-  if (typeof fnOrAttrs === 'function') {
-    define({ component: fnOrAttrs, useShadow: false })
-  } else {
-    define({
-      component: maybeFn!,
-      attributes: fnOrAttrs,
-      useShadow: false
-    })
-  }
+  const { setup, attributes, styles } = resolveOverload<Attrs>(a, b, c)
+  define({ setup, attributes, styles, useShadow: false })
 }
 
 function shadowElement(fn: FunctionalComponent): void
-function shadowElement<Attrs extends string>(observedAttributes: Attrs[], fn: FunctionalComponent<Attrs>): void
+function shadowElement(styles: string, fn: FunctionalComponent): void
 function shadowElement<Attrs extends string>(
-  fnOrAttrs: FunctionalComponent | Attrs[],
-  maybeFn?: FunctionalComponent<Attrs>
+  observedAttributes: Attrs[],
+  fn: FunctionalComponent<Attrs>
+): void
+function shadowElement<Attrs extends string>(
+  observedAttributes: Attrs[],
+  styles: string,
+  fn: FunctionalComponent<Attrs>
+): void
+function shadowElement<Attrs extends string>(
+  a: FunctionalComponent | Attrs[] | string,
+  b?: FunctionalComponent<Attrs> | string,
+  c?: FunctionalComponent<Attrs>
 ): void {
-  if (typeof fnOrAttrs === 'function') {
-    define({ component: fnOrAttrs, useShadow: true })
-  } else {
-    define({
-      component: maybeFn!,
-      attributes: fnOrAttrs,
-      useShadow: true
-    })
+  const { setup, attributes, styles } = resolveOverload<Attrs>(a, b, c)
+  define({ setup, attributes, styles, useShadow: true })
+}
+
+function resolveOverload<Attrs extends string>(
+  a: FunctionalComponent | Attrs[] | string,
+  b?: FunctionalComponent<Attrs> | string,
+  c?: FunctionalComponent<Attrs>
+): { setup: FunctionalComponent<Attrs>; attributes?: Attrs[]; styles?: string } {
+  if (typeof a === 'function') {
+    return { setup: a as FunctionalComponent<Attrs> }
   }
+  if (typeof a === 'string') {
+    return { styles: a, setup: b as FunctionalComponent<Attrs> }
+  }
+  if (typeof b === 'function') {
+    return { attributes: a, setup: b }
+  }
+  return { attributes: a, styles: b, setup: c! }
 }
 
 const state = <T>(value: T) => new Signal.State(value)
@@ -70,20 +108,21 @@ export { state, lightElement, shadowElement }
 
 export function define<Attrs extends string = never>(options: DefineOptions<Attrs>) {
   const {
-    component,
+    setup,
     tagName,
     attributes = [] as unknown as Attrs[],
     useShadow = true,
-    formAssociated = false
+    formAssociated = false,
+    styles
   } = options
 
-  const elementName = (tagName ?? component.name
+  const elementName = (tagName ?? setup.name
     .replaceAll(/([a-z0-9])([A-Z])/g, '$1-$2')
     .replaceAll(/([A-Z]+)([A-Z][a-z])/g, '$1-$2')
     .toLowerCase())
 
   if (!elementName.includes('-')) {
-    throw new Error(`Function ${component.name} must include at least one capital letter to be converted to a valid custom element name`)
+    throw new Error(`Function ${setup.name} must include at least one capital letter to be converted to a valid custom element name`)
   }
 
   if (customElements.get(elementName)) {
@@ -93,6 +132,23 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
   for (const attr of attributes) {
     if (RESERVED_KEYS.has(attr)) {
       throw new Error(`Attribute name "${attr}" conflicts with a reserved context property.`)
+    }
+  }
+
+  // One constructed stylesheet per element type, shared across all instances.
+  // For shadow DOM, it's adopted into each shadowRoot.
+  // For light DOM, it's wrapped in @scope and adopted into the document once.
+  let stylesheet: CSSStyleSheet | undefined
+  if (styles !== undefined) {
+    stylesheet = new CSSStyleSheet()
+    if (useShadow) {
+      stylesheet.replaceSync(styles)
+    } else {
+      stylesheet.replaceSync(`@scope (${elementName}) { ${styles} }`)
+      document.adoptedStyleSheets = [
+        ...document.adoptedStyleSheets,
+        stylesheet
+      ]
     }
   }
 
@@ -115,10 +171,28 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
       super()
       if (useShadow) this.attachShadow({ mode: 'open' })
 
+      if (stylesheet && this.shadowRoot) {
+        this.shadowRoot.adoptedStyleSheets = [
+          ...this.shadowRoot.adoptedStyleSheets,
+          stylesheet
+        ]
+      }
+
       const context = {
         internals: this.attachInternals(),
         effect: (fn: EffectFunction) => {
           this.#effects.push(fn)
+        },
+        styleProps: (props: Record<string, string | number | null>) => {
+          for (const key in props) {
+            const value = props[key]
+            const name = toCustomProperty(key)
+            if (value === null) {
+              this.style.removeProperty(name)
+            } else {
+              this.style.setProperty(name, String(value))
+            }
+          }
         }
       } as ComponentContext<Attrs>
 
@@ -160,7 +234,7 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
         watcher.watch(signal)
       })
 
-      const templateFn = component.call(this, context)
+      const templateFn = setup.call(this, context)
 
       this.#template = new Signal.Computed(() => templateFn())
 
