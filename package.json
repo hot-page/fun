@@ -1,10 +1,10 @@
 {
-  "name": "@hot-page/functional-element",
-  "version": "0.0.2",
+  "name": "@hot-page/fun",
+  "version": "0.0.1",
   "description": "Simple define helper for functional web components",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/hot-page/functional-element.git"
+    "url": "git+https://github.com/hot-page/fun.git"
   },
   "type": "module",
   "main": "./dist/index.js",

@@ -1,5 +1,5 @@
 
-# Hot Element
+# Fun Element
 
 ## Introduction
 
@@ -21,6 +21,7 @@ The best part is this builds on new web standards that make all this super
 easy. The only two dependencies are things that (hopefuly) will be standardized
 in the web platform sooner rather than later.
 
+
 ## Goals
 
 - **Static pages with sprinkles of interactivity** - Perfect for adding dynamic
@@ -28,7 +29,7 @@ in the web platform sooner rather than later.
 - **Minimal boilerplate** - Write components quickly without class ceremony
 - **Standards-based** - Built on Web Components, works everywhere
 
-## Non-Goals
+### Non-Goals
 
 - **Building full applications** - Use React, Vue, or Svelte for SPAs
 - **Complex state management** - This isn't Redux or Zustand
@@ -45,22 +46,19 @@ in the web platform sooner rather than later.
 - Observed attributes support
 - Full TypeScript support
 
-What you give up:
-- Class ceremonny
-- Something about performance
-
 
 ## Prior Art
 
-This was directly inspired by Ginger's [post on Piccalilli](https://piccalil.li/blog/functional-custom-elements-the-easy-way/).
-
-Obviously, React for the simplicity of functional components.
-
+This was directly inspired by Ginger's [post on
+Piccalilli](https://piccalil.li/blog/functional-custom-elements-the-easy-way/).
+Obviously, React for the simplicity of functional components. SolidJS for its
+use of signals and the idea that functional components can be reactive without
+running all the time.
 
 
 ## Quick Start
 
-1. Load `@hot-page/hot-element` from a CDN or install it with NPM.
+1. Load `@hot-page/fun` from a CDN or install it with NPM.
 2. Import one of the define functions: `shadowElement` or `lightElement` as
    well as the `html` templator. Shadow element renders in shadow DOM, and
    light element renders in normal DOM.
@@ -71,15 +69,16 @@ Obviously, React for the simplicity of functional components.
 Create a new element in plain JavaScript:
 
 ```javascript
-import { shadowElement, html, state } from 'https://esm.sh/@hot-page/hot-element'
+import { shadowElement, html, state } from 'https://esm.sh/@hot-page/fun'
 
-// Call the define function with our component
+// Call the define function with a setup function
 shadowElement(function HueSlider() {
   const value = state(0)
   const callCount = state(0)
 
   function onInput(event) {
-    // N.B. this will only call render one time even though we set two signals
+    // N.B. this will only render the element once even though we set two
+    // signals
     value.set(event.target.value)
     callCount.set(callCount.get() + 1)
   }
@@ -126,15 +125,19 @@ I told you this was functional!
 It's important to understand when these functions will run.
 
 1. The define function runs once for every custom element you want to create.
+   You could think of this as the equivalent of creating a class for a custom
+   element.
 2. The setup function will run every time one of your elements on the
-   page is created.
+   page is created. This is almost like the `constructor()` function in an
+   element class.
 3. The render function runs when the reactive properties change and the
-   element's markup will be updated
+   element's DOM will be updated.
 
 The setup function receives a context object with:
 - `effect` - Register side effects with cleanup (see Lifecycle & Cleanup below)
 - `internals` - Access to ElementInternals API (see Using Element Internals below)
 - `styleProps` - Set CSS custom properties on the host element (see Styling below)
+- observed attributes - Each declared attribute is passed as a signal (see Observed Attributes below)
 
 
 ## Rendering in Shadow or Light DOM
@@ -146,7 +149,7 @@ This package provides two define exports:
 You can also use the `define()` function directly if you prefer:
 
 ```javascript
-import { define, html, state } from '@hot-page/hot-element'
+import { define, html, state } from '@hot-page/fun'
 
 define({
   attributes: ['color', 'size'],
@@ -603,7 +606,7 @@ For static HTML pages with script tags, the simplest approach is to put your sta
 <html>
 <head>
   <script type="module">
-    import { shadowElement, html, state } from 'https://esm.sh/@hot-page/hot-element'
+    import { shadowElement, html, state } from 'https://esm.sh/@hot-page/fun'
 
     // Create global store on window
     window.store = {
@@ -660,7 +663,7 @@ If you're using JavaScript modules, you can share state at the module level:
 
 ```javascript
 // shared-counter.js
-import { shadowElement, html, state } from '@hot-page/hot-element'
+import { shadowElement, html, state } from '@hot-page/fun'
 
 // This state is shared across all instances
 const sharedCount = state(0)
@@ -682,7 +685,7 @@ For more complex scenarios with multiple files, create a dedicated store module:
 
 ```javascript
 // store.js
-import { state } from '@hot-page/hot-element'
+import { state } from '@hot-page/fun'
 
 export const store = {
   user: state(null),
@@ -706,7 +709,7 @@ export const store = {
 
 ```javascript
 // user-badge.js
-import { shadowElement, html } from '@hot-page/hot-element'
+import { shadowElement, html } from '@hot-page/fun'
 import { store } from './store.js'
 
 shadowElement(function UserBadge() {
@@ -836,7 +839,7 @@ This is rare — most apps never move elements across documents — and this lib
 This package also exports a `svg` tagged template literal (re-exported from lit-html). Use it instead of `html` **only when the root of your template is an SVG element** — for example when writing a custom SVG shape or icon component:
 
 ```javascript
-import { shadowElement, svg, state } from '@hot-page/hot-element'
+import { shadowElement, svg, state } from '@hot-page/fun'
 
 shadowElement(function AnimatedCircle() {
   const r = state(10)
