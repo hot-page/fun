@@ -63,7 +63,7 @@ running all the time.
    well as the `html` templator. Shadow element renders in shadow DOM, and
    light element renders in normal DOM.
 3. Define your functional component by providing a function.
-4. Use the `state` argument to create new reactive properties
+4. Use `state` to create reactive properties
 5. Return a template that will be re-rendered
 
 Create a new element in plain JavaScript:
@@ -138,6 +138,61 @@ The setup function receives a context object with:
 - `internals` - Access to ElementInternals API (see Using Element Internals below)
 - `styleProps` - Set CSS custom properties on the host element (see Styling below)
 - observed attributes - Each declared attribute is passed as a signal (see Observed Attributes below)
+
+
+## State
+
+`state(value)` creates a reactive container. Read its current value with `.get()`, update it with `.set()`:
+
+```javascript
+const count = state(0)
+count.get()     // 0
+count.set(1)
+count.get()     // 1
+```
+
+Any signal reads inside the render function are tracked — when the signal changes, the element re-renders. State can hold any value: primitives, objects, arrays.
+
+
+## Computed Values
+
+`computed(fn)` derives a read-only value from one or more signals. It's lazy and cached — the function only re-runs when a signal it depends on changes:
+
+```javascript
+import { shadowElement, html, state, computed } from '@hot-page/fun'
+
+shadowElement(function TemperatureConverter() {
+  const celsius = state(0)
+  const fahrenheit = computed(() => celsius.get() * 9 / 5 + 32)
+
+  return () => html`
+    <input
+      type="range" min="-30" max="50"
+      .value=${celsius.get()}
+      @input=${e => celsius.set(Number(e.target.value))}
+    >
+    <p>${celsius.get()}°C = ${fahrenheit.get()}°F</p>
+  `
+})
+```
+
+`computed` has `.get()` but no `.set()`. Computed values can depend on other computed values — the signal graph ensures nothing recomputes more than once per change:
+
+```javascript
+const items = state(['apple', 'banana', 'cherry'])
+const count = computed(() => items.get().length)
+const isEmpty = computed(() => count.get() === 0)
+```
+
+Like `state`, computed values can live at module level and be shared across components:
+
+```javascript
+// store.js
+export const cart = state([])
+export const cartTotal = computed(() =>
+  cart.get().reduce((sum, item) => sum + item.price, 0)
+)
+```
 
 
 ## Rendering in Shadow or Light DOM
@@ -301,7 +356,7 @@ Use `styleProps` when you want to update visual state from an event handler with
 
 ## Lifecycle & Cleanup
 
-Use the `effect` function to register side effects that need cleanup:
+Use the `effect` function to register side effects that automatically track signal dependencies:
 
 ```javascript
 shadowElement(function oneSecondCounter({ effect }) {
@@ -330,19 +385,148 @@ shadowElement(function oneSecondCounter({ effect }) {
 ```
 
 **When effects run:**
-- Setup functions run when the element connects to the DOM
-- Cleanup functions run when the element disconnects from the DOM
-- If an element is moved in the DOM, cleanup runs, then setup runs again
+- Effects run when the element connects to the DOM
+- Effects **automatically re-run** whenever any signal read inside them changes
+- Cleanup functions run before re-running the effect, and when the element disconnects
+- If an element is moved in the DOM, cleanup runs, then effects run again
+
+**Reactive effects:**
+
+Effects automatically track any signals you read inside them and re-run when those signals change:
+
+```javascript
+shadowElement(['size'], function Button({ size, effect }) {
+  const validSizes = ['sm', 'md', 'lg']
+  
+  effect(() => {
+    const value = size.get() // Automatically tracked!
+    if (!validSizes.includes(value)) {
+      console.error(`Invalid size: "${value}". Expected: ${validSizes.join(', ')}`)
+    }
+  })
+  
+  return () => html`<button class="${size.get()}">Click me</button>`
+})
+```
+
+When the `size` attribute changes, the effect re-runs and validates the new value.
+
+**Syncing to external APIs:**
+
+```javascript
+shadowElement(['theme'], function ThemeStorage({ theme, effect }) {
+   // N.B. a real app would use try/catch and validation
+  theme.set(localStorage.theme || 'light')
+
+  effect(() => localStorage.theme = theme.get())
+})
+```
+
+```html
+<theme-storage theme="dark">
+  ...rest of your app uses [theme=light/dark] selectors...
+</theme-storage>
+
+<script>
+  // Update from anywhere in your app and the effect runs, saving the value to local storage
+  document.querySelector('theme-storage').theme = 'dark'
+</script>
+```
+
+**Dynamic subscriptions with cleanup:**
+
+```javascript
+shadowElement(['userId'], function UserProfile({ userId, effect }) {
+  const user = state(null)
+  
+  effect(() => {
+    const id = userId.get()
+    if (!id) return
+    
+    // Subscribe when userId changes
+    const unsubscribe = subscribeToUser(id, data => user.set(data))
+    
+    // `unsubscribe` runs before re-subscribing to a new user
+    return unsubscribe
+  })
+  
+  return () => html`<div>${user.get()?.name || 'Loading...'}</div>`
+})
+```
+
+When `userId` changes, the previous subscription cleanup runs, then the effect re-runs and subscribes to the new user.
+
+**Roll-your-own reactivity:**
+
+You can skip lit-html entirely and manipulate the DOM directly in an effect:
+
+```javascript
+shadowElement(function ManualCounter({ effect }) {
+  const count = state(1)
+
+  effect(() => {
+    // Update DOM manually when count changes
+    const span = this.shadowRoot.querySelector('#value')
+    span.textContent = count.get()
+  })
+
+  this.addEventListener('click', (event) => {
+    if (event.target.closest('#increment')) {
+      count.set(count.get() + 1)
+    } else if (event.target.closest('#decrement')) {
+      count.set(count.get() - 1)
+    }
+  })
+
+  return `
+    <button id="decrement">-</button>
+    <span id="value"></span>
+    <button id="increment">+</button>
+  `
+})
+```
+
+The first effect tracks `count` and updates the DOM when it changes. The second effect doesn't track any signals, so it runs once to set up event listeners.
+
+**Non-reactive effects:**
+
+If your effect doesn't read any signals, it behaves like a simple mount/unmount handler:
+
+```javascript
+effect(() => {
+  console.log('Mounted!')
+  return () => console.log('Unmounted!')
+})
+```
+
+This runs once on mount and cleanup runs on unmount — no re-runs since it doesn't track any signals.
+
+**Avoiding unintended tracking:**
+
+If you need to read a signal's value without tracking it (rare), use `queueMicrotask`:
+
+```javascript
+effect(() => {
+  const reactiveValue = count.get() // Tracked
+  
+  queueMicrotask(() => {
+    const snapshot = otherSignal.get() // Not tracked
+    doSomething(snapshot)
+  })
+})
+```
 
 **When you need effects:**
+- Validation with side effects (logging errors, showing warnings)
+- Syncing to external storage (localStorage, IndexedDB)
 - Global event listeners (window, document)
-- Timers (setInterval, setTimeout)
+- Timers that depend on component state
 - Observers (IntersectionObserver, MutationObserver)
-- External subscriptions (WebSocket, EventSource)
+- External subscriptions (WebSocket, EventSource, Firebase)
 
 **When you DON'T need effects:**
 - Event listeners in your template (lit-html handles cleanup automatically)
-- Signal watchers (they're tied to the element lifecycle)
+- Pure computations (use `computed` or derive inline in the render function)
 
 
 ## Observed Attributes
@@ -685,12 +869,13 @@ For more complex scenarios with multiple files, create a dedicated store module:
 
 ```javascript
 // store.js
-import { state } from '@hot-page/fun'
+import { state, computed } from '@hot-page/fun'
 
 export const store = {
   user: state(null),
   theme: state('light'),
   notifications: state([]),
+  notificationCount: computed(() => store.notifications.get().length),
   
   login(userData) {
     this.user.set(userData)
@@ -725,6 +910,145 @@ shadowElement(function UserBadge() {
 ```
 
 All components reading from `store` will automatically re-render when the shared state changes.
+
+
+## What the Setup Function Can Return
+
+The setup function can return different things depending on how much reactivity you need:
+
+| Return value | Behavior |
+|---|---|
+| **Function** | Reactive. Called on every signal change to re-render the element. |
+| **Template** (`html\`...\``) | Rendered once. No reactivity — signals read inside won't trigger updates. |
+| **String** | Rendered once as HTML markup via `innerHTML`. If the render function returns a string, each update also goes through `innerHTML`. |
+| **Nothing** (`undefined`) | Nothing is rendered. Useful when the setup function only registers effects or sets properties. |
+| **Anything else** | Logs a `console.error` at construction time. |
+
+The typical pattern is to return a render function so the element reacts to signal changes:
+
+```javascript
+shadowElement(function MyEl() {
+  const count = state(0)
+
+  // ✅ function — reactive
+  return () => html`<p>${count.get()}</p>`
+})
+```
+
+The render function doesn't have to return a template. If it returns nothing, it's still called whenever signals change — you just manage the output yourself. This is useful when you want reactivity without handing DOM control to lit-html.
+
+For example, an element that takes a `theme` attribute and sets its colors directly — no template needed, just style updates:
+
+```javascript
+shadowElement(['theme'], function ThemedBox({ theme }) {
+  return () => {
+    const isDark = theme.get() === 'dark'
+    this.style.background = isDark ? '#1a1a2e' : '#f5f0e8'
+    this.style.color = isDark ? '#ffffff' : '#000000'
+    // no return — render function just sets styles
+  }
+})
+```
+
+```html
+<themed-box theme="dark">Dark mode content</themed-box>
+<themed-box theme="light">Light mode content</themed-box>
+```
+
+Change the `theme` attribute and the colors update reactively.
+
+Or an element that manages its own DOM with `innerHTML`:
+
+```javascript
+shadowElement(['items'], function RawRenderer({ items }) {
+  return () => {
+    this.shadowRoot.innerHTML = (items.get() ?? '')
+      .split(' ')
+      .map(item => `<li>${item.trim()}</li>`)
+      .join('')
+    // no return — we've already written to the DOM directly
+  }
+})
+```
+
+```html
+<raw-renderer items="one two three"></raw-renderer>
+```
+
+Both are fully reactive: the function reruns whenever any signal read inside it changes.
+
+You can also conditionally return nothing — it's a no-op:
+
+```javascript
+shadowElement(['mode'], function ConditionalRender({ mode }) {
+  return () => {
+    if (mode.get() === 'custom') {
+      // manage DOM yourself
+      this.shadowRoot.innerHTML = '<p>Custom render</p>'
+      return // no-op, we already rendered
+    }
+    // otherwise return a template
+    return html`<p>Standard render</p>`
+  }
+})
+```
+
+If you want to render something that will never change, you can return a template directly:
+
+```javascript
+shadowElement(function StaticGreeting() {
+  // ✅ template — rendered once, no reactivity
+  return html`<p>Hello, world!</p>`
+})
+```
+
+Returning nothing is fine when your setup only needs side effects:
+
+```javascript
+shadowElement(function SideEffectOnly({ effect }) {
+  effect(() => {
+    console.log('connected')
+    return () => console.log('disconnected')
+  })
+
+  // ✅ no return — nothing rendered
+})
+```
+
+Returning a plain string is a shortcut for fully static markup you control:
+
+```javascript
+shadowElement(function Disclaimer() {
+  return '<p>All prices include VAT.</p>'
+})
+```
+
+A render function can also return a string, in which case each reactive update sets `innerHTML` with the new value:
+
+```javascript
+shadowElement(function Greeting() {
+  const name = state('world')
+
+  return () => `<p>Hello, ${name.get()}!</p>`
+})
+```
+
+The same rule applies: this is direct `innerHTML` assignment, so only use it with content you control.
+
+**Do not put user input in a string return.** The string goes straight into `innerHTML` with no escaping, so any HTML it contains is executed. If the content comes from a user, a database, or anywhere outside your source code, use `html\`...\`` instead — lit-html escapes expression values by default:
+
+```javascript
+// ❌ XSS: userBio could contain <script>...</script>
+return `<p>${userBio}</p>`
+
+// ✅ Safe: lit-html escapes the value
+return () => html`<p>${userBio}</p>`
+```
+
+This library is for developers who know what they're putting in their markup and when to reach for `html\`...\``. It doesn't try to protect you from yourself.
+
+
+Any other return type (number, object, array, etc.) logs a `console.error` immediately so you catch the mistake early.
 
 
 ## Gotchas
@@ -807,6 +1131,43 @@ document.body.appendChild(el)
 // now it runs
 ```
 
+### Effects track signal reads automatically
+
+Effects re-run whenever any signal read inside them changes. This is usually what you want, but watch out for:
+
+**Infinite loops** — writing to a signal you're reading in the same effect can cause rapid re-runs:
+
+```javascript
+// ⚠️  Will re-run rapidly until stopped
+effect(() => {
+  count.set(count.get() + 1) // Reads then writes
+})
+
+// ✅ OK — conditional limits execution
+effect(() => {
+  const val = count.get()
+  if (val < 10) {
+    count.set(val + 1)
+  }
+})
+```
+
+Always add guards when writing to tracked signals within an effect.
+
+**Unintended tracking** — reading a signal always tracks it, even in conditionals:
+
+```javascript
+effect(() => {
+  if (enabled.get()) {
+    console.log(value.get())
+  }
+})
+// Tracks both `enabled` and `value` once enabled is true
+// Effect re-runs when either changes
+```
+
+Use `queueMicrotask` if you need to read a signal without tracking it (see Lifecycle & Cleanup section).
+
 ### Setting multiple signals triggers one render
 
 Updating several signals in a row is coalesced into a single render on the next microtask. This is a feature, but it means you can't observe intermediate state between sets:
@@ -861,6 +1222,11 @@ return () => svg`<circle ... />`             // ✅ use svg only at SVG root
 ```
 
 The distinction matters because lit-html uses the tag to parse the template in the correct namespace context. Using `html` for SVG roots will result in elements created in the HTML namespace, which browsers won't render correctly.
+
+
+## Roadmap
+
+- **Typed attributes** — Declare typed attributes so the framework converts them automatically, rather than having to parse strings manually in each component. Types: integer, float, boolean, token list, JSON, function. Yes, function for more _fun_.
 
 
 ## A Hot Page Project

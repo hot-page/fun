@@ -308,6 +308,7 @@ describe('effect lifecycle', () => {
     const parent = el.parentElement!
     el.remove()
     parent.appendChild(el)
+    await nextMicrotask()
     expect(runCount).to.equal(2)
   })
 
@@ -325,6 +326,244 @@ describe('effect lifecycle', () => {
     expect(log).to.deep.equal(['a', 'b'])
     el.remove()
     expect(log).to.deep.equal(['a', 'b', '~a', '~b'])
+  })
+
+  it('effect re-runs when a tracked signal changes', async () => {
+    let runCount = 0
+    const count = state(0)
+    define({
+      tagName: 'effect-auto-track',
+      setup: function EffectAutoTrack({ effect }) {
+        effect(() => {
+          count.get() // Track this signal
+          runCount++
+        })
+        return () => html``
+      }
+    })
+    await mount('<effect-auto-track></effect-auto-track>')
+    expect(runCount).to.equal(1)
+    
+    count.set(1)
+    await nextMicrotask()
+    expect(runCount).to.equal(2)
+    
+    count.set(2)
+    await nextMicrotask()
+    expect(runCount).to.equal(3)
+  })
+
+  it('effect does not re-run when no signals are tracked', async () => {
+    let runCount = 0
+    const count = state(0)
+    define({
+      tagName: 'effect-no-track',
+      setup: function EffectNoTrack({ effect }) {
+        effect(() => {
+          runCount++
+          // Don't read any signals
+        })
+        return () => html``
+      }
+    })
+    await mount('<effect-no-track></effect-no-track>')
+    expect(runCount).to.equal(1)
+    
+    count.set(1)
+    await nextMicrotask()
+    expect(runCount).to.equal(1) // Should not have re-run
+  })
+
+  it('effect re-runs when observed attribute signal changes', async () => {
+    const log: string[] = []
+    define({
+      tagName: 'effect-attr-track',
+      attributes: ['color'],
+      setup: function EffectAttrTrack({ color, effect }) {
+        effect(() => {
+          log.push(`color:${color.get()}`)
+        })
+        return () => html``
+      }
+    })
+    const el = await mount('<effect-attr-track color="red"></effect-attr-track>')
+    expect(log).to.deep.equal(['color:red'])
+    
+    el.setAttribute('color', 'blue')
+    await nextMicrotask()
+    expect(log).to.deep.equal(['color:red', 'color:blue'])
+  })
+
+  it('effect cleanup runs before re-running', async () => {
+    const log: string[] = []
+    const count = state(0)
+    define({
+      tagName: 'effect-cleanup-rerun',
+      setup: function EffectCleanupRerun({ effect }) {
+        effect(() => {
+          const val = count.get()
+          log.push(`run:${val}`)
+          return () => log.push(`cleanup:${val}`)
+        })
+        return () => html``
+      }
+    })
+    await mount('<effect-cleanup-rerun></effect-cleanup-rerun>')
+    expect(log).to.deep.equal(['run:0'])
+    
+    count.set(1)
+    await nextMicrotask()
+    expect(log).to.deep.equal(['run:0', 'cleanup:0', 'run:1'])
+    
+    count.set(2)
+    await nextMicrotask()
+    expect(log).to.deep.equal(['run:0', 'cleanup:0', 'run:1', 'cleanup:1', 'run:2'])
+  })
+
+  it('effect tracks multiple signals', async () => {
+    let runCount = 0
+    const a = state(0)
+    const b = state(0)
+    define({
+      tagName: 'effect-multi-signal',
+      setup: function EffectMultiSignal({ effect }) {
+        effect(() => {
+          a.get()
+          b.get()
+          runCount++
+        })
+        return () => html``
+      }
+    })
+    await mount('<effect-multi-signal></effect-multi-signal>')
+    expect(runCount).to.equal(1)
+    
+    a.set(1)
+    await nextMicrotask()
+    expect(runCount).to.equal(2)
+    
+    b.set(1)
+    await nextMicrotask()
+    expect(runCount).to.equal(3)
+  })
+
+  it('effect can conditionally track signals', async () => {
+    let runCount = 0
+    const enabled = state(false)
+    const value = state(0)
+    define({
+      tagName: 'effect-conditional-track',
+      setup: function EffectConditionalTrack({ effect }) {
+        effect(() => {
+          runCount++
+          if (enabled.get()) {
+            value.get() // Only track value when enabled
+          }
+        })
+        return () => html``
+      }
+    })
+    await mount('<effect-conditional-track></effect-conditional-track>')
+    expect(runCount).to.equal(1)
+    
+    // value changes but effect shouldn't re-run (not tracking it yet)
+    value.set(1)
+    await nextMicrotask()
+    expect(runCount).to.equal(1)
+    
+    // Enable tracking
+    enabled.set(true)
+    await nextMicrotask()
+    expect(runCount).to.equal(2)
+    
+    // Now value changes should trigger re-runs
+    value.set(2)
+    await nextMicrotask()
+    expect(runCount).to.equal(3)
+  })
+
+  it('effect with validation use case', async () => {
+    const errors: string[] = []
+    define({
+      tagName: 'effect-validation',
+      attributes: ['size'],
+      setup: function EffectValidation({ size, effect }) {
+        effect(() => {
+          const value = size.get()
+          const validSizes = ['sm', 'md', 'lg']
+          if (value && !validSizes.includes(value)) {
+            errors.push(`Invalid size: ${value}`)
+          }
+        })
+        return () => html``
+      }
+    })
+    const el = await mount('<effect-validation size="md"></effect-validation>')
+    expect(errors).to.deep.equal([])
+    
+    el.setAttribute('size', 'invalid')
+    await nextMicrotask()
+    expect(errors).to.deep.equal(['Invalid size: invalid'])
+    
+    el.setAttribute('size', 'lg')
+    await nextMicrotask()
+    expect(errors).to.deep.equal(['Invalid size: invalid']) // No new error
+    
+    el.setAttribute('size', 'bad')
+    await nextMicrotask()
+    expect(errors).to.deep.equal(['Invalid size: invalid', 'Invalid size: bad'])
+  })
+
+  it('effect cleanup runs on disconnect after signal changes', async () => {
+    const log: string[] = []
+    const count = state(0)
+    define({
+      tagName: 'effect-disconnect-after-change',
+      setup: function EffectDisconnectAfterChange({ effect }) {
+        effect(() => {
+          const val = count.get()
+          log.push(`run:${val}`)
+          return () => log.push(`cleanup:${val}`)
+        })
+        return () => html``
+      }
+    })
+    const el = await mount('<effect-disconnect-after-change></effect-disconnect-after-change>')
+    expect(log).to.deep.equal(['run:0'])
+    
+    count.set(5)
+    await nextMicrotask()
+    expect(log).to.deep.equal(['run:0', 'cleanup:0', 'run:5'])
+    
+    el.remove()
+    expect(log).to.deep.equal(['run:0', 'cleanup:0', 'run:5', 'cleanup:5'])
+  })
+
+  it('roll-your-own reactivity with manual DOM updates', async function() {
+    define({
+      tagName: 'manual-dom-counter',
+      attributes: ['count'],
+      setup: function ManualDomCounter({ count, effect }) {
+        effect(() => {
+          const span = this.shadowRoot!.querySelector('#value')
+          span!.textContent = count.get() || '0'
+        })
+        
+        return '<button id="dec">-</button><span id="value"></span><button id="inc">+</button>'
+      }
+    })
+    
+    const el = await mount('<manual-dom-counter count="5"></manual-dom-counter>')
+    const span = el.shadowRoot!.querySelector('#value')
+    expect(span!.textContent).to.equal('5')
+    
+    el.setAttribute('count', '10')
+    await nextMicrotask()
+    expect(span!.textContent).to.equal('10')
+    
+    el.setAttribute('count', '0')
+    await nextMicrotask()
+    expect(span!.textContent).to.equal('0')
   })
 })
 
@@ -667,5 +906,152 @@ describe('styleProps helper', () => {
         setup: function ReservedStyleProps() { return () => html`` }
       })
     ).to.throw(/reserved/)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 15. Setup function return value handling
+// ---------------------------------------------------------------------------
+
+describe('setup return value', () => {
+  it('returning a function sets up reactive rendering', async () => {
+    const count = state(0)
+    define({
+      tagName: 'return-fn',
+      setup: function ReturnFn() { return () => html`<span>${count.get()}</span>` }
+    })
+    const el = await mount('<return-fn></return-fn>')
+    expect(el.shadowRoot!.querySelector('span')!.textContent).to.equal('0')
+    count.set(99)
+    await nextMicrotask()
+    expect(el.shadowRoot!.querySelector('span')!.textContent).to.equal('99')
+  })
+
+  it('returning a template renders it once with no reactivity', async () => {
+    const count = state(0)
+    let renderCalls = 0
+    define({
+      tagName: 'return-template',
+      setup: function ReturnTemplate() {
+        renderCalls++
+        return html`<span id="s">${count.get()}</span>`
+      }
+    })
+    const el = await mount('<return-template></return-template>')
+    expect(el.shadowRoot!.querySelector('#s')!.textContent).to.equal('0')
+    count.set(42)
+    await nextMicrotask()
+    // DOM should not have updated — no reactivity
+    expect(el.shadowRoot!.querySelector('#s')!.textContent).to.equal('0')
+    // Setup ran exactly once
+    expect(renderCalls).to.equal(1)
+  })
+
+  it('returning a string renders it as HTML via innerHTML', async () => {
+    define({
+      tagName: 'return-string',
+      setup: function ReturnString() {
+        return '<p id="p">static</p>'
+      }
+    })
+    const el = await mount('<return-string></return-string>')
+    expect(el.shadowRoot!.querySelector('#p')!.textContent).to.equal('static')
+  })
+
+  it('returning a string renders HTML markup, not escaped text', async () => {
+    define({
+      tagName: 'return-string-markup',
+      setup: function ReturnStringMarkup() {
+        return '<em id="em">markup</em>'
+      }
+    })
+    const el = await mount('<return-string-markup></return-string-markup>')
+    const em = el.shadowRoot!.querySelector('#em')
+    expect(em).to.exist
+    expect(em!.tagName.toLowerCase()).to.equal('em')
+  })
+
+  it('render function returning a string re-renders via innerHTML on signal change', async () => {
+    const name = state('world')
+    define({
+      tagName: 'return-fn-string',
+      setup: function ReturnFnString() {
+        return () => `<p id="p">Hello, ${name.get()}!</p>`
+      }
+    })
+    const el = await mount('<return-fn-string></return-fn-string>')
+    expect(el.shadowRoot!.querySelector('#p')!.textContent).to.equal('Hello, world!')
+    name.set('Alice')
+    await nextMicrotask()
+    expect(el.shadowRoot!.querySelector('#p')!.textContent).to.equal('Hello, Alice!')
+  })
+
+  it('render function returning a string sets innerHTML not a text node', async () => {
+    define({
+      tagName: 'return-fn-string-markup',
+      setup: function ReturnFnStringMarkup() {
+        return () => '<strong id="s">bold</strong>'
+      }
+    })
+    const el = await mount('<return-fn-string-markup></return-fn-string-markup>')
+    const strong = el.shadowRoot!.querySelector('#s')
+    expect(strong).to.exist
+    expect(strong!.tagName.toLowerCase()).to.equal('strong')
+  })
+
+  it('returning undefined renders nothing and does not throw', async () => {
+    define({
+      tagName: 'return-undefined',
+      setup: function ReturnUndefined() { return undefined }
+    })
+    const el = await mount('<return-undefined></return-undefined>')
+    expect(el.shadowRoot!.innerHTML).to.equal('')
+  })
+
+  it('returning undefined still runs effects', async () => {
+    let ran = false
+    define({
+      tagName: 'return-undefined-effect',
+      setup: function ReturnUndefinedEffect({ effect }) {
+        effect(() => { ran = true })
+        return undefined
+      }
+    })
+    await mount('<return-undefined-effect></return-undefined-effect>')
+    expect(ran).to.be.true
+  })
+
+  it('returning a number logs a console.error', async () => {
+    define({
+      tagName: 'return-number',
+      setup: function ReturnNumber() { return 42 as any }
+    })
+    const errors: string[] = []
+    const orig = console.error
+    console.error = (...args: unknown[]) => errors.push(args.join(' '))
+    try {
+      await mount('<return-number></return-number>')
+    } finally {
+      console.error = orig
+    }
+    expect(errors.length).to.be.greaterThan(0)
+    expect(errors[0]).to.match(/unexpected value/)
+  })
+
+  it('returning an object logs a console.error', async () => {
+    define({
+      tagName: 'return-object',
+      setup: function ReturnObject() { return {} as any }
+    })
+    const errors: string[] = []
+    const orig = console.error
+    console.error = (...args: unknown[]) => errors.push(args.join(' '))
+    try {
+      await mount('<return-object></return-object>')
+    } finally {
+      console.error = orig
+    }
+    expect(errors.length).to.be.greaterThan(0)
+    expect(errors[0]).to.match(/unexpected value/)
   })
 })

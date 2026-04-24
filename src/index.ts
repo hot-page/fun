@@ -10,6 +10,13 @@ export type StylePropsFunction = (
   props: Record<string, string | number | null>
 ) => void
 
+interface EffectEntry {
+  fn: EffectFunction
+  computed?: Signal.Computed<CleanupFunction | void>
+  watcher?: any
+  cleanup?: CleanupFunction | void
+}
+
 type AttributeSignals<Attrs extends string> = {
   [K in Attrs]: Signal.State<string | null>
 }
@@ -103,8 +110,9 @@ function resolveOverload<Attrs extends string>(
 }
 
 const state = <T>(value: T) => new Signal.State(value)
+const computed = <T>(fn: () => T) => new Signal.Computed(fn)
 
-export { state, lightElement, shadowElement }
+export { state, computed, lightElement, shadowElement }
 
 export function define<Attrs extends string = never>(options: DefineOptions<Attrs>) {
   const {
@@ -129,11 +137,11 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
     throw new Error(`Custom element with name ${elementName} already defined`)
   }
 
-  for (const attr of attributes) {
+  attributes.forEach(attr => {
     if (RESERVED_KEYS.has(attr)) {
       throw new Error(`Attribute name "${attr}" conflicts with a reserved context property.`)
     }
-  }
+  })
 
   // One constructed stylesheet per element type, shared across all instances.
   // For shadow DOM, it's adopted into each shadowRoot.
@@ -153,10 +161,9 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
   }
 
   customElements.define(elementName, class extends HTMLElement {
-    #template!: Signal.Computed<ReturnType<typeof html>>
-    #watcher!: any
-    #effects: EffectFunction[] = []
-    #cleanups: CleanupFunction[] = []
+    #template: Signal.Computed<ReturnType<typeof html>> | undefined
+    #watcher: any
+    #effects: EffectEntry[] = []
     #attributeSignals: Map<string, Signal.State<string | null>> = new Map()
 
     static get observedAttributes() {
@@ -180,11 +187,9 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
 
       const context = {
         internals: this.attachInternals(),
-        effect: (fn: EffectFunction) => {
-          this.#effects.push(fn)
-        },
+        effect: (fn: EffectFunction) => this.#effects.push({ fn }),
         styleProps: (props: Record<string, string | number | null>) => {
-          for (const key in props) {
+          Object.keys(props).forEach(key => {
             const value = props[key]
             const name = toCustomProperty(key)
             if (value === null) {
@@ -192,7 +197,7 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
             } else {
               this.style.setProperty(name, String(value))
             }
-          }
+          })
         }
       } as ComponentContext<Attrs>
 
@@ -234,42 +239,112 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
         watcher.watch(signal)
       })
 
-      const templateFn = setup.call(this, context)
+      const setupResult = setup.call(this, context)
 
-      this.#template = new Signal.Computed(() => templateFn())
+      const target = useShadow ? this.shadowRoot! : this
 
-      const renderTemplate = () =>
-        render(this.#template.get(), useShadow ? this.shadowRoot! : this)
+      if (typeof setupResult === 'function') {
+        this.#template = new Signal.Computed(() => setupResult())
 
-      let renderPending = false
-      this.#watcher = new Signal.subtle.Watcher(() => {
-        if (renderPending) return
-        renderPending = true
-        queueMicrotask(() => {
-          renderPending = false
-          renderTemplate()
-          this.#watcher.watch()
+        const template = this.#template
+        const renderTemplate = () => {
+          const result = template.get()
+          if (typeof result === 'string') {
+            target.innerHTML = result
+          } else if (result !== undefined && result !== null) {
+            render(result, target)
+          }
+        }
+
+        let renderPending = false
+        this.#watcher = new Signal.subtle.Watcher(() => {
+          if (renderPending) return
+          renderPending = true
+          queueMicrotask(() => {
+            renderPending = false
+            try {
+              renderTemplate()
+            } catch (error) {
+              console.error(
+                `Error in render function for <${tagName}> fun element: `,
+                error,
+              )
+            }
+            this.#watcher.watch()
+          })
         })
-      })
 
-      this.#watcher.watch(this.#template)
+        this.#watcher.watch(this.#template)
 
-      renderTemplate()
+        renderTemplate()
+      } else if (setupResult === undefined) {
+      } else if (typeof setupResult === 'string') {
+        target.innerHTML = setupResult
+      } else if (typeof setupResult === 'object' && '_$litType$' in (setupResult as object)) {
+        render(setupResult, target)
+      } else {
+        console.error(
+          `Setup function for <${tagName}> returned an unexpected value. ` +
+          `Expected a render function, a template (html\`...\`), a string, or nothing. ` +
+          `Got: ${typeof setupResult}`
+        )
+      }
     }
 
     connectedCallback() {
-      this.#watcher.watch(this.#template)
-      this.#cleanups = this.#effects
-        .map(effect => effect())
-        .filter((cleanup): cleanup is CleanupFunction =>
-          typeof cleanup === 'function'
-        )
+      if (this.#watcher && this.#template) {
+        this.#watcher.watch(this.#template)
+      }
+
+      this.#effects.forEach(entry => {
+        try {
+          entry.computed = new Signal.Computed(() => entry.fn())
+
+          entry.watcher = new Signal.subtle.Watcher(() => {
+            queueMicrotask(() => {
+              if (typeof entry.cleanup === 'function') {
+                entry.cleanup()
+              }
+
+              entry.computed = new Signal.Computed(() => entry.fn())
+
+              try {
+                entry.cleanup = entry.computed.get()
+              } catch (error) {
+                console.error(
+                  `Error in effect for <${elementName}> fun element: `,
+                  error
+                )
+              }
+
+              entry.watcher.watch(entry.computed)
+            })
+          })
+
+          entry.cleanup = entry.computed.get()
+          entry.watcher.watch(entry.computed)
+        } catch (error) {
+          console.error(
+            `Error in effect for <${elementName}> fun element: `,
+            error
+          )
+        }
+      })
     }
 
     disconnectedCallback() {
-      this.#watcher.unwatch(this.#template)
-      this.#cleanups.forEach(cleanup => cleanup())
-      this.#cleanups = []
+      if (this.#watcher && this.#template) {
+        this.#watcher.unwatch(this.#template)
+      }
+      
+      // Clean up all effects and stop watching
+      this.#effects.forEach(effectEntry => {
+        effectEntry.watcher.unwatch(effectEntry.computed)
+        if (typeof effectEntry.cleanup === 'function') {
+          effectEntry.cleanup()
+        }
+        effectEntry.cleanup = undefined
+      })
     }
 
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null) {
