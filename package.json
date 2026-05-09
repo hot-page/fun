@@ -1,6 +1,6 @@
 {
   "name": "@hot-page/fun",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "description": "Simple define helper for functional web components",
   "repository": {
     "type": "git",

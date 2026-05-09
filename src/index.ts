@@ -163,6 +163,7 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
   customElements.define(elementName, class extends HTMLElement {
     #template: Signal.Computed<ReturnType<typeof html>> | undefined
     #watcher: any
+    #renderTemplate: (() => void) | undefined
     #effects: EffectEntry[] = []
     #attributeSignals: Map<string, Signal.State<string | null>> = new Map()
 
@@ -246,12 +247,11 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
       if (typeof setupResult === 'function') {
         this.#template = new Signal.Computed(() => setupResult())
 
-        const template = this.#template
-        const renderTemplate = () => {
-          const result = template.get()
+        this.#renderTemplate = () => {
+          const result = this.#template!.get()
           if (typeof result === 'string') {
             target.innerHTML = result
-          } else if (result !== undefined && result !== null) {
+          } else {
             render(result, target)
           }
         }
@@ -263,10 +263,10 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
           queueMicrotask(() => {
             renderPending = false
             try {
-              renderTemplate()
+              this.#renderTemplate!()
             } catch (error) {
               console.error(
-                `Error in render function for <${tagName}> fun element: `,
+                `Error in render function for <${elementName}> fun element: `,
                 error,
               )
             }
@@ -274,17 +274,15 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
           })
         })
 
-        this.#watcher.watch(this.#template)
-
-        renderTemplate()
-      } else if (setupResult === undefined) {
       } else if (typeof setupResult === 'string') {
         target.innerHTML = setupResult
       } else if (typeof setupResult === 'object' && '_$litType$' in (setupResult as object)) {
         render(setupResult, target)
+      } else if (setupResult === undefined) {
+        return
       } else {
         console.error(
-          `Setup function for <${tagName}> returned an unexpected value. ` +
+          `Setup function for <${elementName}> returned an unexpected value. ` +
           `Expected a render function, a template (html\`...\`), a string, or nothing. ` +
           `Got: ${typeof setupResult}`
         )
@@ -294,6 +292,7 @@ export function define<Attrs extends string = never>(options: DefineOptions<Attr
     connectedCallback() {
       if (this.#watcher && this.#template) {
         this.#watcher.watch(this.#template)
+        this.#renderTemplate?.()
       }
 
       this.#effects.forEach(entry => {
